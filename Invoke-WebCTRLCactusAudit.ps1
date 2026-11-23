@@ -1,10 +1,11 @@
 & {
 # ==============================================================================
-# WebCTRL / i-Vu Cactus Exploit Audit Script (Read-Only - v5 Complete Chain)
-# Updates in v5:
-#   - Added Check 2E for classic Windows PowerShell Event ID 400 (HostApplication=)
-#     to capture exact Runtime.exec() cradles (e.g., DownloadString / -enc)
-#   - Preserves all v4 checks (ports 8995/8894/8968, Event 4104, i80_* temp dirs)
+# WebCTRL / i-Vu Cactus Exploit Audit Script (Read-Only - v6 Fleet Clean)
+# Updates in v6:
+#   - Added StartTime='2026-11-19 00:00:00' filter to Check 2A (Security 4688)
+#   - Added StartTime='2026-11-19 00:00:00' filter to Check 2C (Defender 1116/1117)
+#   - Excluded audit script & report filenames in Check 4B to prevent self-matches
+#   - Preserves all v5 checks (ports 8995/8894/8968, Event 4104, Event 400, i80_*)
 # ==============================================================================
 
 $ErrorActionPreference = 'SilentlyContinue'
@@ -85,10 +86,10 @@ if ($suspiciousDns) {
 # ------------------------------------------------------------------------------
 # 2. WINDOWS EVENT LOGS (Security 4688, PS 4104, Defender, System 7045, PS 400)
 # ------------------------------------------------------------------------------
-Write-Section "2A. Security Log (Event ID 4688 - Suspicious Process Creation)"
-$secEvents = Get-WinEvent -FilterHashtable @{LogName='Security'; Id=4688} |
+Write-Section "2A. Security Log (Event ID 4688 - Suspicious Process Creation Since Nov 19, 2026)"
+$secEvents = Get-WinEvent -FilterHashtable @{LogName='Security'; Id=4688; StartTime='2026-11-19 00:00:00'} |
     Where-Object {
-        $_.Message -notmatch 'Get-WinEvent|Cactus_Audit' -and
+        $_.Message -notmatch 'Get-WinEvent|Cactus_Audit|Invoke-WebCTRLCactusAudit' -and
         $_.Message -match 'java\.exe.*(cmd\.exe|powershell)|javaw\.exe.*(cmd\.exe|powershell)|==ROOTS2==|IP_MARK=|2\.57\.241\.75'
     } |
     Select-Object TimeCreated, Message -First 20
@@ -99,13 +100,13 @@ if ($secEvents) {
         Write-Log "[$($ev.TimeCreated)]`n$snippet`n---" 'Red'
     }
 } else {
-    Write-Log "PASS/INFO: No suspicious process creation events in Security log." 'Green'
+    Write-Log "PASS/INFO: No suspicious process creation events in Security log since Nov 19, 2026." 'Green'
 }
 
 Write-Section "2B. PowerShell Operational Log (Event ID 4104 - Attacker Payloads)"
 $psEvents = Get-WinEvent -FilterHashtable @{LogName='Microsoft-Windows-PowerShell/Operational'; Id=4104} |
     Where-Object {
-        $_.Message -notmatch 'Get-WinEvent|Cactus_Audit_' -and
+        $_.Message -notmatch 'Get-WinEvent|Cactus_Audit_|Invoke-WebCTRLCactusAudit' -and
         $_.Message -match '==ROOTS2==|==LICFILES==|==LIC SEARCH==|IP_MARK=|CANDIDATE_ROOTS|UploadString\([''"]http://2\.57\.241\.75|UploadData\(\$V\+|bean_.*_80\.xml|ps3\.xml'
     } |
     Select-Object TimeCreated, Message -First 15
@@ -120,17 +121,17 @@ if ($psEvents) {
     Write-Log "PASS: No attacker PowerShell payloads found in Event ID 4104." 'Green'
 }
 
-Write-Section "2C. Windows Defender Operational Log (Detections 1116/1117)"
-$defEvents = Get-WinEvent -FilterHashtable @{LogName='Microsoft-Windows-Windows Defender/Operational'} |
+Write-Section "2C. Windows Defender Operational Log (Detections 1116/1117 Since Nov 19, 2026)"
+$defEvents = Get-WinEvent -FilterHashtable @{LogName='Microsoft-Windows-Windows Defender/Operational'; StartTime='2026-11-19 00:00:00'} |
     Where-Object { $_.Id -in 1116,1117 } |
     Select-Object TimeCreated, Id, Message -First 15
 if ($defEvents) {
-    Write-Log "ALERT: Windows Defender malware detections found:" 'Red'
+    Write-Log "ALERT: Windows Defender malware detections found since Nov 19, 2026:" 'Red'
     foreach ($ev in $defEvents) {
         Write-Log "[$($ev.TimeCreated)] ID $($ev.Id): $($ev.Message)`n---" 'Red'
     }
 } else {
-    Write-Log "PASS: No Windows Defender malware detections found." 'Green'
+    Write-Log "PASS: No Windows Defender malware detections found since Nov 19, 2026." 'Green'
 }
 
 Write-Section "2D. System Log (Event ID 7045 - New Services Installed Since Nov 19, 2026)"
@@ -147,7 +148,7 @@ if ($svcEvents) {
 Write-Section "2E. Classic Windows PowerShell Log (Event ID 400 - Spawned Cradles)"
 $ps400Events = Get-WinEvent -FilterHashtable @{LogName='Windows PowerShell'; Id=400; StartTime='2026-11-19 00:00:00'} |
     Where-Object {
-        $_.Message -notmatch 'Invoke-WebCTRLCactusAudit\.ps1|Get-MpComputerStatus|Final result: 1' -and
+        $_.Message -notmatch 'Invoke-WebCTRLCactusAudit|Get-MpComputerStatus|Final result: 1' -and
         $_.Message -match 'HostApplication=.*powershell.*(-w\s+hidden|-windowstyle\s+hidden|-enc|-encodedcommand|DownloadString|DownloadData|2\.57\.241\.75|@@MARK@@)'
     } |
     Select-Object TimeCreated, Message -First 15
@@ -231,9 +232,12 @@ if (-not $webctrlDirs) {
             Write-Log "PASS: No cactus*.jar files present in $dir." 'Green'
         }
 
-        # 4B. Search logs for Cactus exploit / Spring RCE / Threat Actor IP (excluding stack trace noise)
+        # 4B. Search logs for Cactus exploit / Spring RCE / Threat Actor IP (excluding stack trace noise & self-files)
         $logHits = Get-ChildItem -Path $dir -Include *.txt,*.log -Recurse |
-            Where-Object { $_.FullName -notmatch '\\\.install4j\\' } |
+            Where-Object {
+                $_.FullName -notmatch '\\\.install4j\\' -and
+                $_.Name -notmatch 'Cactus_Audit|Invoke-WebCTRLCactusAudit'
+            } |
             Select-String -Pattern "ServletRedirector|JspRedirector|FilterRedirector|ClassPathXmlApplicationContext|Cactus_Service|Cactus_TestClass|2\.57\.241\.75" |
             Where-Object { $_.Line -notmatch '^\s*at\s+' }
         if ($logHits) {
