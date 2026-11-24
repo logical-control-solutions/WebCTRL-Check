@@ -1,11 +1,11 @@
 & {
 # ==============================================================================
-# WebCTRL / i-Vu Cactus Exploit Audit Script (Read-Only - v7 Strict PASS/FAIL)
-# Updates in v7:
-#   - Replaced 3-tier ALERT/REVIEW/CLEAN verdict with strict binary PASS / FAIL
-#   - Informational items (keystorePass, recent webroot patches, non-Cactus 7045)
-#     log as INFO ('Gray') so clean servers return a definitive PASS
-#   - Preserves all v6 checks (ports 8995/8894/8968, Event 4688/4104/400, i80_*)
+# WebCTRL / i-Vu Cactus Exploit Audit Script (Read-Only - v8 Strict PASS/FAIL)
+# Updates in v8:
+#   - Excluded VS Code PowerShell Editor Services AST parser Base64 prefix in
+#     Check 2E (Event ID 400) to prevent false FAILs on workstations/servers
+#   - Preserves strict binary PASS / FAIL verdict from v7
+#   - Preserves all v6/v7 checks (ports 8995/8894/8968, Event 4688/4104/400, i80_*)
 # ==============================================================================
 
 $ErrorActionPreference = 'SilentlyContinue'
@@ -146,7 +146,7 @@ if ($svcEvents) {
 Write-Section "2E. Classic Windows PowerShell Log (Event ID 400 - Spawned Cradles)"
 $ps400Events = Get-WinEvent -FilterHashtable @{LogName='Windows PowerShell'; Id=400; StartTime='2026-11-19 00:00:00'} |
     Where-Object {
-        $_.Message -notmatch 'Invoke-WebCTRLCactusAudit|Get-MpComputerStatus|Final result: 1' -and
+        $_.Message -notmatch 'Invoke-WebCTRLCactusAudit|Get-MpComputerStatus|Final result: 1|dAByAGEAcAB7AGUAeABpAHQAIAAxAH0AOwAkAGUAbgB2ADoAUABTAE0AbwBkAHUAbABlAFAAYQB0AGgA' -and
         $_.Message -match 'HostApplication=.*powershell.*(-w\s+hidden|-windowstyle\s+hidden|-enc|-encodedcommand|DownloadString|DownloadData|2\.57\.241\.75|@@MARK@@)'
     } |
     Select-Object TimeCreated, Message -First 15
