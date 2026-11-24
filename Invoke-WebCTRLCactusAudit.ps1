@@ -1,11 +1,15 @@
 & {
 # ==============================================================================
-# WebCTRL / i-Vu Cactus Exploit Audit Script (Read-Only - v9 Strict PASS/FAIL)
-# Updates in v9:
-#   - Added Tenable Nessus Azure AD Join compliance scanner Base64 prefix to
-#     Check 2E exclusions alongside VS Code PowerShell Editor Services parser
-#   - Preserves strict binary PASS / FAIL verdict from v7/v8
-#   - Preserves all v6-v8 checks (ports 8995/8894/8968, Event 4688/4104/400, i80_*)
+# WebCTRL / i-Vu Cactus Exploit Audit Script (Read-Only - v10 Strict PASS/FAIL)
+# Updates in v10:
+#   - Added second threat actor IP: 217.60.97.59
+#   - Added C2 ports: 8899, 8901, 8920, 8993, 9042, 9065 (plus 8995/8894/8968)
+#   - Added new Spring XML bean & class probe signatures (bean_i56*, bean_lic*,
+#     bean_probe, bean_sock*, bean_url, bean_i137*, bean_i71*, oracle_java.*,
+#     /x/*.xml, a7f2c9.xml, d2f8a4.xml, i111_*_ps3.xml, i842_*_ps3.xml)
+#   - Expanded Check 4E Temp staging folder scan to i<digits>_* (i56_, i71_,
+#     i80_, i111_, i137_, i842_, etc.)
+#   - Preserves all v9 exclusions (VS Code parser, Tenable Nessus, self-files)
 # ==============================================================================
 
 $ErrorActionPreference = 'SilentlyContinue'
@@ -13,6 +17,9 @@ $timestamp  = Get-Date -Format 'yyyyMMdd_HHmmss'
 $reportPath = "$env:USERPROFILE\Desktop\Cactus_Audit_$($env:COMPUTERNAME)_$timestamp.txt"
 
 $script:HasFail = $false
+
+$threatIps   = @('2.57.241.75', '217.60.97.59')
+$threatPorts = @(8995, 8894, 8968, 8899, 8901, 8920, 8993, 9042, 9065)
 
 function Write-Section {
     param([string]$Title)
@@ -37,16 +44,16 @@ Write-Log "Audit Started: $(Get-Date) | Host: $env:COMPUTERNAME" 'Green'
 # ------------------------------------------------------------------------------
 # 1. ACTIVE NETWORK CONNECTIONS & SUSPICIOUS DNS CACHE
 # ------------------------------------------------------------------------------
-Write-Section "1A. Active TCP Connections to Threat Actor IP (2.57.241.75) or Ports 8995/8894/8968"
+Write-Section "1A. Active TCP Connections to Threat Actor IPs (2.57.241.75 / 217.60.97.59) or C2 Ports"
 $badConns = Get-NetTCPConnection | Where-Object {
-    $_.RemoteAddress -eq '2.57.241.75' -or $_.RemotePort -in 8995,8894,8968
+    $_.RemoteAddress -in $threatIps -or $_.RemotePort -in $threatPorts
 }
 if ($badConns) {
     Write-Log "FAIL: Active connection to threat actor infrastructure detected!" 'Red'
     $table = ($badConns | Select-Object LocalAddress,LocalPort,RemoteAddress,RemotePort,State,OwningProcess | Format-Table -AutoSize | Out-String).Trim()
     Write-Log $table 'Red'
 } else {
-    Write-Log "PASS: No active TCP connections to 2.57.241.75 or ports 8995/8894/8968." 'Green'
+    Write-Log "PASS: No active TCP connections to threat actor IPs or C2 ports." 'Green'
 }
 
 Write-Section "1B. Active External TCP Connections Owned by Java / WebCTRL"
@@ -69,9 +76,9 @@ if ($javaProcs) {
     Write-Log "INFO: No running java/cjgreen processes found." 'Gray'
 }
 
-Write-Section "1C. DNS Cache Check (Filtered for Threat Actor / Dynamic DNS)"
+Write-Section "1C. DNS Cache Check (Filtered for Threat Actor IPs / Dynamic DNS)"
 $suspiciousDns = Get-DnsClientCache | Where-Object {
-    $_.Data -match '2\.57\.241\.75' -or $_.Entry -match 'ngrok|duckdns|interact\.sh|oast\.|burpcollaborator|pastebin|transfer\.sh'
+    $_.Data -match '2\.57\.241\.75|217\.60\.97\.59' -or $_.Entry -match 'ngrok|duckdns|interact\.sh|oast\.|burpcollaborator|pastebin|transfer\.sh'
 } | Select-Object Entry, Data, TimeToLive
 if ($suspiciousDns) {
     Write-Log "FAIL: Suspicious DNS cache entries detected:" 'Red'
@@ -88,7 +95,7 @@ Write-Section "2A. Security Log (Event ID 4688 - Suspicious Process Creation Sin
 $secEvents = Get-WinEvent -FilterHashtable @{LogName='Security'; Id=4688; StartTime='2026-11-19 00:00:00'} |
     Where-Object {
         $_.Message -notmatch 'Get-WinEvent|Cactus_Audit|Invoke-WebCTRLCactusAudit' -and
-        $_.Message -match 'java\.exe.*(cmd\.exe|powershell)|javaw\.exe.*(cmd\.exe|powershell)|==ROOTS2==|IP_MARK=|2\.57\.241\.75'
+        $_.Message -match 'java\.exe.*(cmd\.exe|powershell)|javaw\.exe.*(cmd\.exe|powershell)|==ROOTS2==|IP_MARK=|2\.57\.241\.75|217\.60\.97\.59'
     } |
     Select-Object TimeCreated, Message -First 20
 if ($secEvents) {
@@ -105,7 +112,7 @@ Write-Section "2B. PowerShell Operational Log (Event ID 4104 - Attacker Payloads
 $psEvents = Get-WinEvent -FilterHashtable @{LogName='Microsoft-Windows-PowerShell/Operational'; Id=4104} |
     Where-Object {
         $_.Message -notmatch 'Get-WinEvent|Cactus_Audit_|Invoke-WebCTRLCactusAudit' -and
-        $_.Message -match '==ROOTS2==|==LICFILES==|==LIC SEARCH==|IP_MARK=|CANDIDATE_ROOTS|UploadString\([''"]http://2\.57\.241\.75|UploadData\(\$V\+|bean_.*_80\.xml|ps3\.xml'
+        $_.Message -match '==ROOTS2==|==LICFILES==|==LIC SEARCH==|IP_MARK=|CANDIDATE_ROOTS|UploadString\([''"]http://(2\.57\.241\.75|217\.60\.97\.59)|UploadData\(\$V\+|2\.57\.241\.75|217\.60\.97\.59|bean_(i56|i71|i137|lic|probe|sock|url).*\.xml|ps3\.xml|a7f2c9\.xml|d2f8a4\.xml'
     } |
     Select-Object TimeCreated, Message -First 15
 if ($psEvents) {
@@ -147,7 +154,7 @@ Write-Section "2E. Classic Windows PowerShell Log (Event ID 400 - Spawned Cradle
 $ps400Events = Get-WinEvent -FilterHashtable @{LogName='Windows PowerShell'; Id=400; StartTime='2026-11-19 00:00:00'} |
     Where-Object {
         $_.Message -notmatch 'Invoke-WebCTRLCactusAudit|Get-MpComputerStatus|Final result: 1|dAByAGEAcAB7AGUAeABpAHQAIAAxAH0AOwAkAGUAbgB2ADoAUABTAE0AbwBkAHUAbABlAFAAYQB0AGgA|QQBkAGQALQBUAHkAcABlACAALQBUAHkAcABlAEQAZQBmAGkAbgBpAHQAaQBvAG4AIABAACcACgB1AHMAaQBuAGcAIABTAHkAcwB0AGUAbQA7AAoAdQBzAGkAbgBnACAAUwB5AHMAdABlAG0ALgBSAHUAbgB0AGkAbQBl' -and
-        $_.Message -match 'HostApplication=.*powershell.*(-w\s+hidden|-windowstyle\s+hidden|-enc|-encodedcommand|DownloadString|DownloadData|2\.57\.241\.75|@@MARK@@)'
+        $_.Message -match 'HostApplication=.*powershell.*(-w\s+hidden|-windowstyle\s+hidden|-enc|-encodedcommand|DownloadString|DownloadData|2\.57\.241\.75|217\.60\.97\.59|@@MARK@@)'
     } |
     Select-Object TimeCreated, Message -First 15
 if ($ps400Events) {
@@ -166,9 +173,9 @@ if ($ps400Events) {
 Write-Section "3. Windows Defender Firewall Log Check"
 $fwLog = "$env:SystemRoot\System32\LogFiles\Firewall\pfirewall.log"
 if (Test-Path $fwLog) {
-    $fwHits = Select-String -Path $fwLog -Pattern "2\.57\.241\.75|8995|8894|8968"
+    $fwHits = Select-String -Path $fwLog -Pattern "2\.57\.241\.75|217\.60\.97\.59|8995|8894|8968|8899|8901|8920|8993|9042|9065"
     if ($fwHits) {
-        Write-Log "FAIL: Firewall log matches found for threat actor IP/Ports:" 'Red'
+        Write-Log "FAIL: Firewall log matches found for threat actor IPs/Ports:" 'Red'
         foreach ($hit in $fwHits) {
             Write-Log "Line $($hit.LineNumber): $($hit.Line)" 'Red'
         }
@@ -230,13 +237,14 @@ if (-not $webctrlDirs) {
             Write-Log "PASS: No cactus*.jar files present in $dir." 'Green'
         }
 
-        # 4B. Search logs for Cactus exploit / Spring RCE / Threat Actor IP (excluding stack trace noise & self-files)
+        # 4B. Search logs for Cactus exploit / Spring RCE / Threat Actor IPs & XML Payloads (excluding stack trace noise & self-files)
+        $logPattern = "ServletRedirector|JspRedirector|FilterRedirector|ClassPathXmlApplicationContext|Cactus_Service|Cactus_TestClass|2\.57\.241\.75|217\.60\.97\.59|bean_(i56|i71|i137|lic|probe|sock|url).*\.xml|oracle_java\.lang\.String|oracle_java\.net\.URL|a7f2c9\.xml|d2f8a4\.xml|i111_.*_ps3\.xml|i842_.*_ps3\.xml|204\.184\.92\.88_80\.xml"
         $logHits = Get-ChildItem -Path $dir -Include *.txt,*.log -Recurse |
             Where-Object {
                 $_.FullName -notmatch '\\\.install4j\\' -and
                 $_.Name -notmatch 'Cactus_Audit|Invoke-WebCTRLCactusAudit'
             } |
-            Select-String -Pattern "ServletRedirector|JspRedirector|FilterRedirector|ClassPathXmlApplicationContext|Cactus_Service|Cactus_TestClass|2\.57\.241\.75" |
+            Select-String -Pattern $logPattern |
             Where-Object { $_.Line -notmatch '^\s*at\s+' }
         if ($logHits) {
             Write-Log "FAIL: Exploit / probe indicators found in application logs ($($logHits.Count) key lines):" 'Red'
@@ -291,24 +299,26 @@ if (-not $webctrlDirs) {
     }
 }
 
-# 4E. Check Windows & Service Account Temp Directories for Attacker Staging Folders (i80_*)
-Write-Log "`n--- Checking Temp Directories for Attacker Staging Folders (i80_*) ---" 'Cyan'
+# 4E. Check Windows & Service Account Temp Directories for Attacker Staging Folders (i56_*, i71_*, i80_*, i111_*, i137_*, i842_*, etc.)
+Write-Log "`n--- Checking Temp Directories for Attacker Staging Folders (i<digits>_*) ---" 'Cyan'
 $tempTargets = @("C:\Windows\Temp")
 Get-ChildItem -Path "C:\Users" -Directory | ForEach-Object {
     $userTemp = Join-Path $_.FullName "AppData\Local\Temp"
     if (Test-Path $userTemp) { $tempTargets += $userTemp }
 }
 $stagingDirs = foreach ($tDir in ($tempTargets | Select-Object -Unique)) {
-    Get-ChildItem -Path $tDir -Filter "i80_*" -Directory -Force
+    Get-ChildItem -Path $tDir -Directory -Force | Where-Object {
+        $_.Name -match '^(i\d+_|a7f2c9|d2f8a4)'
+    }
 }
 if ($stagingDirs) {
-    Write-Log "FAIL: Attacker ps3 staging folder(s) found on disk!" 'Red'
+    Write-Log "FAIL: Attacker staging folder(s) found on disk!" 'Red'
     foreach ($sd in $stagingDirs) {
         $files = (Get-ChildItem -Path $sd.FullName -Force | Select-Object -ExpandProperty Name) -join ', '
         Write-Log "  -> $($sd.FullName) (Created: $($sd.CreationTime) | Contents: $files)" 'Red'
     }
 } else {
-    Write-Log "PASS: No i80_* attacker staging folders found in Temp directories." 'Green'
+    Write-Log "PASS: No attacker staging folders found in Temp directories." 'Green'
 }
 
 # ------------------------------------------------------------------------------
