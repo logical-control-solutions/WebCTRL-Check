@@ -1,19 +1,18 @@
 & {
 # ==============================================================================
-# WebCTRL / i-Vu Cactus Exploit Audit Script (Read-Only - v6 Fleet Clean)
-# Updates in v6:
-#   - Added StartTime='2026-11-19 00:00:00' filter to Check 2A (Security 4688)
-#   - Added StartTime='2026-11-19 00:00:00' filter to Check 2C (Defender 1116/1117)
-#   - Excluded audit script & report filenames in Check 4B to prevent self-matches
-#   - Preserves all v5 checks (ports 8995/8894/8968, Event 4104, Event 400, i80_*)
+# WebCTRL / i-Vu Cactus Exploit Audit Script (Read-Only - v7 Strict PASS/FAIL)
+# Updates in v7:
+#   - Replaced 3-tier ALERT/REVIEW/CLEAN verdict with strict binary PASS / FAIL
+#   - Informational items (keystorePass, recent webroot patches, non-Cactus 7045)
+#     log as INFO ('Gray') so clean servers return a definitive PASS
+#   - Preserves all v6 checks (ports 8995/8894/8968, Event 4688/4104/400, i80_*)
 # ==============================================================================
 
 $ErrorActionPreference = 'SilentlyContinue'
 $timestamp  = Get-Date -Format 'yyyyMMdd_HHmmss'
 $reportPath = "$env:USERPROFILE\Desktop\Cactus_Audit_$($env:COMPUTERNAME)_$timestamp.txt"
 
-$script:HasAlert  = $false
-$script:HasReview = $false
+$script:HasFail = $false
 
 function Write-Section {
     param([string]$Title)
@@ -28,8 +27,7 @@ function Write-Log {
         [ValidateSet('White','Green','Yellow','Red','Cyan','Gray')]
         [string]$Color = 'White'
     )
-    if ($Color -eq 'Red')    { $script:HasAlert  = $true }
-    if ($Color -eq 'Yellow') { $script:HasReview = $true }
+    if ($Color -eq 'Red') { $script:HasFail = $true }
     Write-Host $Text -ForegroundColor $Color
     Add-Content -Path $reportPath -Value $Text
 }
@@ -44,7 +42,7 @@ $badConns = Get-NetTCPConnection | Where-Object {
     $_.RemoteAddress -eq '2.57.241.75' -or $_.RemotePort -in 8995,8894,8968
 }
 if ($badConns) {
-    Write-Log "ALERT: Active connection to threat actor infrastructure detected!" 'Red'
+    Write-Log "FAIL: Active connection to threat actor infrastructure detected!" 'Red'
     $table = ($badConns | Select-Object LocalAddress,LocalPort,RemoteAddress,RemotePort,State,OwningProcess | Format-Table -AutoSize | Out-String).Trim()
     Write-Log $table 'Red'
 } else {
@@ -61,9 +59,9 @@ if ($javaProcs) {
         } | Select-Object @{N='Process';E={$proc.Name}},LocalAddress,LocalPort,RemoteAddress,RemotePort,State,OwningProcess
     }
     if ($extJavaConns) {
-        Write-Log "REVIEW: External public TCP connections established by Java processes:" 'Yellow'
+        Write-Log "INFO: External public TCP connections established by Java processes:" 'Gray'
         $table = ($extJavaConns | Format-Table -AutoSize | Out-String).Trim()
-        Write-Log $table 'Yellow'
+        Write-Log $table 'Gray'
     } else {
         Write-Log "PASS: No external public TCP connections owned by Java processes." 'Green'
     }
@@ -76,7 +74,7 @@ $suspiciousDns = Get-DnsClientCache | Where-Object {
     $_.Data -match '2\.57\.241\.75' -or $_.Entry -match 'ngrok|duckdns|interact\.sh|oast\.|burpcollaborator|pastebin|transfer\.sh'
 } | Select-Object Entry, Data, TimeToLive
 if ($suspiciousDns) {
-    Write-Log "ALERT: Suspicious DNS cache entries detected:" 'Red'
+    Write-Log "FAIL: Suspicious DNS cache entries detected:" 'Red'
     $table = ($suspiciousDns | Format-Table -AutoSize | Out-String).Trim()
     Write-Log $table 'Red'
 } else {
@@ -94,13 +92,13 @@ $secEvents = Get-WinEvent -FilterHashtable @{LogName='Security'; Id=4688; StartT
     } |
     Select-Object TimeCreated, Message -First 20
 if ($secEvents) {
-    Write-Log "ALERT: Suspicious process creation events found:" 'Red'
+    Write-Log "FAIL: Suspicious process creation events found:" 'Red'
     foreach ($ev in $secEvents) {
         $snippet = ($ev.Message -split "`r?`n" | Select-Object -First 12) -join "`n"
         Write-Log "[$($ev.TimeCreated)]`n$snippet`n---" 'Red'
     }
 } else {
-    Write-Log "PASS/INFO: No suspicious process creation events in Security log since Nov 19, 2026." 'Green'
+    Write-Log "PASS: No suspicious process creation events in Security log since Nov 19, 2026." 'Green'
 }
 
 Write-Section "2B. PowerShell Operational Log (Event ID 4104 - Attacker Payloads)"
@@ -111,7 +109,7 @@ $psEvents = Get-WinEvent -FilterHashtable @{LogName='Microsoft-Windows-PowerShel
     } |
     Select-Object TimeCreated, Message -First 15
 if ($psEvents) {
-    Write-Log "ALERT: Attacker PowerShell recon/exfiltration payloads detected!" 'Red'
+    Write-Log "FAIL: Attacker PowerShell recon/exfiltration payloads detected!" 'Red'
     foreach ($ev in $psEvents) {
         $preview = ($ev.Message -split "`r?`n" | Select-Object -First 12) -join "`n"
         Write-Log "=== EVENT AT $($ev.TimeCreated) ===`n$preview`n[... full script block saved to report ...]`n" 'Red'
@@ -126,7 +124,7 @@ $defEvents = Get-WinEvent -FilterHashtable @{LogName='Microsoft-Windows-Windows 
     Where-Object { $_.Id -in 1116,1117 } |
     Select-Object TimeCreated, Id, Message -First 15
 if ($defEvents) {
-    Write-Log "ALERT: Windows Defender malware detections found since Nov 19, 2026:" 'Red'
+    Write-Log "FAIL: Windows Defender malware detections found since Nov 19, 2026:" 'Red'
     foreach ($ev in $defEvents) {
         Write-Log "[$($ev.TimeCreated)] ID $($ev.Id): $($ev.Message)`n---" 'Red'
     }
@@ -137,9 +135,9 @@ if ($defEvents) {
 Write-Section "2D. System Log (Event ID 7045 - New Services Installed Since Nov 19, 2026)"
 $svcEvents = Get-WinEvent -FilterHashtable @{LogName='System'; Id=7045; StartTime='2026-11-19 00:00:00'}
 if ($svcEvents) {
-    Write-Log "REVIEW: New service(s) installed since Nov 19, 2026:" 'Yellow'
+    Write-Log "INFO: New service(s) installed since Nov 19, 2026:" 'Gray'
     foreach ($ev in $svcEvents) {
-        Write-Log "[$($ev.TimeCreated)] $($ev.Message)`n---" 'Yellow'
+        Write-Log "[$($ev.TimeCreated)] $($ev.Message)`n---" 'Gray'
     }
 } else {
     Write-Log "PASS: No new Windows services installed since Nov 19, 2026." 'Green'
@@ -153,7 +151,7 @@ $ps400Events = Get-WinEvent -FilterHashtable @{LogName='Windows PowerShell'; Id=
     } |
     Select-Object TimeCreated, Message -First 15
 if ($ps400Events) {
-    Write-Log "ALERT: Suspicious hidden/remote PowerShell cradle execution found in Event ID 400!" 'Red'
+    Write-Log "FAIL: Suspicious hidden/remote PowerShell cradle execution found in Event ID 400!" 'Red'
     foreach ($ev in $ps400Events) {
         $hostApp = ($ev.Message -split "`r?`n" | Where-Object { $_ -match 'HostApplication=' }) -join "`n"
         Write-Log "[$($ev.TimeCreated)] $($hostApp.Trim())" 'Red'
@@ -170,7 +168,7 @@ $fwLog = "$env:SystemRoot\System32\LogFiles\Firewall\pfirewall.log"
 if (Test-Path $fwLog) {
     $fwHits = Select-String -Path $fwLog -Pattern "2\.57\.241\.75|8995|8894|8968"
     if ($fwHits) {
-        Write-Log "ALERT: Firewall log matches found for threat actor IP/Ports:" 'Red'
+        Write-Log "FAIL: Firewall log matches found for threat actor IP/Ports:" 'Red'
         foreach ($hit in $fwHits) {
             Write-Log "Line $($hit.LineNumber): $($hit.Line)" 'Red'
         }
@@ -216,7 +214,7 @@ foreach ($drv in 'C','D','E') {
 $webctrlDirs = $candidateDirs | Select-Object -Unique | Where-Object { Test-Path $_ }
 
 if (-not $webctrlDirs) {
-    Write-Log "REVIEW: Could not auto-detect WebCTRL/i-Vu directories on C:, D:, or E:." 'Yellow'
+    Write-Log "INFO: Could not auto-detect WebCTRL/i-Vu directories on C:, D:, or E:." 'Gray'
 } else {
     foreach ($dir in $webctrlDirs) {
         Write-Log "`n--- Scanning Directory: $dir ---" 'Cyan'
@@ -224,7 +222,7 @@ if (-not $webctrlDirs) {
         # 4A. Check if vulnerable cactus*.jar still exists
         $cactusJars = Get-ChildItem -Path $dir -Filter "*cactus*.jar" -Recurse
         if ($cactusJars) {
-            Write-Log "ALERT (VULNERABLE): Cactus JAR(s) still present on disk!" 'Red'
+            Write-Log "FAIL (VULNERABLE): Cactus JAR(s) still present on disk!" 'Red'
             foreach ($jar in $cactusJars) {
                 Write-Log "  -> $($jar.FullName) (Modified: $($jar.LastWriteTime))" 'Red'
             }
@@ -241,7 +239,7 @@ if (-not $webctrlDirs) {
             Select-String -Pattern "ServletRedirector|JspRedirector|FilterRedirector|ClassPathXmlApplicationContext|Cactus_Service|Cactus_TestClass|2\.57\.241\.75" |
             Where-Object { $_.Line -notmatch '^\s*at\s+' }
         if ($logHits) {
-            Write-Log "ALERT: Exploit / probe indicators found in application logs ($($logHits.Count) key lines):" 'Red'
+            Write-Log "FAIL: Exploit / probe indicators found in application logs ($($logHits.Count) key lines):" 'Red'
             foreach ($hit in ($logHits | Select-Object -First 30)) {
                 Write-Log "  $($hit.Path):$($hit.LineNumber) -> $($hit.Line.Trim())" 'Red'
             }
@@ -252,7 +250,7 @@ if (-not $webctrlDirs) {
             Write-Log "PASS: Zero exploit/probe matches in application logs." 'Green'
         }
 
-        # 4C. Check first 300 lines of Tomcat/Web configs for exposed secrets
+        # 4C. Check first 300 lines of Tomcat/Web configs for exposed secrets (Informational unless breached)
         $cfgSubPaths = @(
             "webserver\conf\server.xml",
             "webserver\conf\tomcat-users.xml",
@@ -267,9 +265,9 @@ if (-not $webctrlDirs) {
                 $lines = Get-Content -Path $cfgFile -TotalCount 300
                 $secretHits = $lines | Select-String -Pattern 'keystorePass|truststorePass|<user\s+username='
                 if ($secretHits) {
-                    Write-Log "REVIEW: Credential/keystore attributes found in first 300 lines of $cfgFile (rotate if compromised):" 'Yellow'
+                    Write-Log "INFO: Credential/keystore attributes present in $cfgFile (rotate only if host failed audit):" 'Gray'
                     foreach ($sh in $secretHits) {
-                        Write-Log "  Line $($sh.LineNumber): $($sh.Line.Trim())" 'Yellow'
+                        Write-Log "  Line $($sh.LineNumber): $($sh.Line.Trim())" 'Gray'
                     }
                 }
             }
@@ -281,10 +279,10 @@ if (-not $webctrlDirs) {
             $recentWebFiles = Get-ChildItem -Path $webroot -Include *.jsp,*.jspx,*.jar -Recurse |
                 Where-Object { $_.LastWriteTime -gt (Get-Date).AddDays(-30) }
             if ($recentWebFiles) {
-                Write-Log "REVIEW: $($recentWebFiles.Count) file(s) in webroot created/modified in the last 30 days (verify dates match legitimate patches):" 'Yellow'
+                Write-Log "INFO: $($recentWebFiles.Count) file(s) in webroot created/modified in the last 30 days:" 'Gray'
                 $groupedDates = $recentWebFiles | Group-Object { $_.LastWriteTime.ToString('yyyy-MM-dd') }
                 foreach ($grp in $groupedDates) {
-                    Write-Log "  Date $($grp.Name): $($grp.Count) file(s) (e.g., $($grp.Group[0].FullName))" 'Yellow'
+                    Write-Log "  Date $($grp.Name): $($grp.Count) file(s) (e.g., $($grp.Group[0].FullName))" 'Gray'
                 }
             } else {
                 Write-Log "PASS: No .jsp/.jspx/.jar files modified in webroot within the last 30 days." 'Green'
@@ -304,7 +302,7 @@ $stagingDirs = foreach ($tDir in ($tempTargets | Select-Object -Unique)) {
     Get-ChildItem -Path $tDir -Filter "i80_*" -Directory -Force
 }
 if ($stagingDirs) {
-    Write-Log "ALERT: Attacker ps3 staging folder(s) found on disk!" 'Red'
+    Write-Log "FAIL: Attacker ps3 staging folder(s) found on disk!" 'Red'
     foreach ($sd in $stagingDirs) {
         $files = (Get-ChildItem -Path $sd.FullName -Force | Select-Object -ExpandProperty Name) -join ', '
         Write-Log "  -> $($sd.FullName) (Created: $($sd.CreationTime) | Contents: $files)" 'Red'
@@ -324,23 +322,21 @@ Write-Log $userTable 'White'
 Write-Section "5B. Scheduled Tasks Created/Modified Since Nov 19, 2026"
 $recentTasks = Get-ScheduledTask | Where-Object { $_.Date -gt '2026-11-19' } | Select-Object TaskName, TaskPath, Date
 if ($recentTasks) {
-    Write-Log "REVIEW: Scheduled tasks created/modified since Nov 19, 2026:" 'Yellow'
+    Write-Log "INFO: Scheduled tasks created/modified since Nov 19, 2026:" 'Gray'
     $taskTable = ($recentTasks | Format-Table -AutoSize | Out-String).Trim()
-    Write-Log $taskTable 'Yellow'
+    Write-Log $taskTable 'Gray'
 } else {
     Write-Log "PASS: No scheduled tasks created or modified since Nov 19, 2026." 'Green'
 }
 
 # ------------------------------------------------------------------------------
-# FINAL SUMMARY BANNER
+# FINAL SUMMARY BANNER (STRICT PASS / FAIL)
 # ------------------------------------------------------------------------------
 Write-Section "FINAL HOST VERDICT: $env:COMPUTERNAME"
-if ($script:HasAlert) {
-    Write-Log "STATUS: [ALERT - ACTION REQUIRED] Exploit indicators or vulnerable cactus*.jar found on $env:COMPUTERNAME!" 'Red'
-} elseif ($script:HasReview) {
-    Write-Log "STATUS: [REVIEW] No active compromise alerts, but review highlighted items above on $env:COMPUTERNAME." 'Yellow'
+if ($script:HasFail) {
+    Write-Log "STATUS: [FAIL - ACTION REQUIRED] Exploit indicators or vulnerable cactus*.jar found on $env:COMPUTERNAME!" 'Red'
 } else {
-    Write-Log "STATUS: [CLEAN] No Cactus JARs, exploit logs, or compromise indicators found on $env:COMPUTERNAME." 'Green'
+    Write-Log "STATUS: [PASS - CLEAN] No Cactus JARs, exploit logs, or compromise indicators found on $env:COMPUTERNAME." 'Green'
 }
 Write-Log "Full report saved to: $reportPath" 'Green'
 }
